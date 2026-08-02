@@ -41,7 +41,7 @@ Definitions come from the free [Dictionary API](https://dictionaryapi.dev/)
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/get-meaning.git
+git clone https://github.com/prayagpadwal/get-meaning.git
 cd get-meaning
 
 # 2. (Recommended) create a virtual environment
@@ -135,17 +135,21 @@ Press the hotkey ──► app simulates Copy (Ctrl/⌘+C)
 Read the clipboard ──► clean it down to a single word
       │
       ▼
-Fetch the definition from the free Dictionary API
+Show the panel immediately  (the word + a loading spinner)
       │
       ▼
-Show a popup next to the cursor  (clipboard is then restored)
+Fetch the definition from the free Dictionary API  (in the background)
+      │
+      ▼
+Fill the definition into the panel  (clipboard is then restored)
 ```
 
-To capture the selection, the app briefly places a marker on the clipboard,
-simulates a copy, and checks whether the clipboard changed — that's how it
-reliably tells "you selected a word" from "you selected nothing" without ever
-showing you a stale result. Your previous clipboard contents are restored a
-moment later.
+The selection is copied *before* the panel appears, because the panel takes
+keyboard focus — copying afterwards would grab from the panel instead of your
+text. To tell "you selected a word" from "you selected nothing", the app
+briefly places a marker on the clipboard, simulates a copy, and checks whether
+the clipboard changed, so it never shows you a stale result. Your previous
+clipboard contents are restored a moment later.
 
 ---
 
