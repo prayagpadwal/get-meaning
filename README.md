@@ -17,7 +17,7 @@ it works **everywhere**, not just inside Chrome.
 
 ## Features
 
-- 🔎 **Look up any selected word** with a single hotkey (default: `Ctrl+Shift+D`)
+- 🔎 **Look up any selected word** with a single hotkey (default: `Alt+Shift+D`)
 - 🖥️ **Works in every app**, not just the browser — desktop apps, PDFs, editors
 - 🌍 **Cross-platform** — Windows, macOS, and Linux (X11)
 - 🪶 **Tiny and dependency-light** — three small Python libraries
@@ -62,7 +62,7 @@ Start it:
 python get_meaning.py
 ```
 
-Then, in **any** application: **select a word → press `Ctrl+Shift+D`**.
+Then, in **any** application: **select a word → press `Alt+Shift+D`**.
 A popup appears next to your cursor. Press `Esc` or click it to dismiss.
 
 Quit by closing the terminal window or pressing `Ctrl+C` in it.
@@ -76,7 +76,7 @@ Quit by closing the terminal window or pressing `Ctrl+C` in it.
 
 | Flag         | Default          | Description                                  |
 |--------------|------------------|----------------------------------------------|
-| `--hotkey`   | `<ctrl>+<shift>+d` | The trigger combo. Both `ctrl+shift+d` and `<ctrl>+<shift>+d` styles work. |
+| `--hotkey`   | `<alt>+<shift>+d` | The trigger combo. Both `alt+shift+d` and `<alt>+<shift>+d` styles work. |
 | `--lang`     | `en`             | Dictionary language code (e.g. `en`, `es`, `fr`, `de`). |
 | `--timeout`  | `12`             | Seconds before the popup auto-closes.        |
 
