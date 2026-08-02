@@ -55,6 +55,7 @@ if _MISSING:
     )
 
 import tkinter as tk  # noqa: E402  (stdlib, always available)
+import tkinter.font as tkfont  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Defaults (all overridable via command-line flags — see main())
@@ -67,7 +68,30 @@ MAX_PARTS_OF_SPEECH = 3
 MAX_DEFS_PER_PART = 2
 
 IS_MAC = sys.platform == "darwin"
+IS_WIN = sys.platform.startswith("win")
 COPY_MODIFIER = Key.cmd if IS_MAC else Key.ctrl
+
+# ---------------------------------------------------------------------------
+# Popup look & feel
+# ---------------------------------------------------------------------------
+UI_FONT = "Segoe UI" if IS_WIN else ("Helvetica Neue" if IS_MAC else "DejaVu Sans")
+THEME = {
+    "card":      "#23252b",   # card background
+    "border":    "#3a3d45",   # card outline
+    "word":      "#f6f7f8",   # the looked-up word
+    "phonetic":  "#9aa0a6",   # /prəˌnʌnsiˈeɪʃən/
+    "accent":    "#8ab4f8",   # part-of-speech tags + list numbers
+    "definition":"#dfe1e5",   # definition text
+    "hint":      "#6b7078",   # "Esc / click to close"
+}
+# A colour we don't otherwise use, made fully transparent on Windows so the
+# card can have real rounded corners. Other platforms fall back to a plain
+# (still rounded-looking) card on a solid background.
+_TRANSPARENT = "#010203"
+_PAD = 18            # inner padding
+_DEF_WRAP = 360      # definition wrap width (px)
+_NUM_COL = 24        # width reserved for list numbers
+_RADIUS = 14         # corner radius
 
 # A value we never expect to see selected — lets us reliably detect the case
 # where the copy did nothing (e.g. no word was selected).
@@ -176,24 +200,32 @@ def _fetch(url, retries=2):
     return resp
 
 
+def _msg(title, message):
+    """Build a simple message payload (errors, 'no word selected', etc.)."""
+    return {"title": title, "message": message}
+
+
 def lookup(word, lang):
-    """Return a formatted definition string, or a friendly message."""
+    """Return a structured payload for the popup to render.
+
+    Success: {"title", "phonetic", "meanings": [{"pos", "defs": [...]}, ...]}
+    Otherwise: {"title", "message"} (rendered as a plain note)."""
     url = API.format(lang=lang, word=requests.utils.quote(word))
     resp = _fetch(url)
 
     if resp is None:
-        return (f"{word}\n\nCouldn't reach the dictionary.\n"
-                "Check your internet connection.")
+        return _msg(word, "Couldn't reach the dictionary.\n"
+                          "Check your internet connection.")
     if resp.status_code == 404:
-        return f"{word}\n\nNo definition found."
+        return _msg(word, "No definition found.")
     if resp.status_code != 200:
-        return (f"{word}\n\nThe dictionary service is having trouble "
-                f"(HTTP {resp.status_code}).\nPlease try again in a moment.")
+        return _msg(word, "The dictionary service is having trouble "
+                          f"(HTTP {resp.status_code}).\nPlease try again in a moment.")
 
     try:
         entry = resp.json()[0]
     except (ValueError, IndexError, KeyError, TypeError):
-        return f"{word}\n\nNo definition found."
+        return _msg(word, "No definition found.")
 
     phonetic = entry.get("phonetic") or ""
     if not phonetic:
@@ -202,23 +234,25 @@ def lookup(word, lang):
                 phonetic = p["text"]
                 break
 
-    header = entry.get("word", word)
-    if phonetic:
-        header += f"   {phonetic}"
-
-    lines = [header, ""]
+    meanings = []
     for meaning in entry.get("meanings", [])[:MAX_PARTS_OF_SPEECH]:
         pos = meaning.get("partOfSpeech", "")
-        if pos:
-            lines.append(pos)
-        for i, d in enumerate(meaning.get("definitions", [])[:MAX_DEFS_PER_PART], 1):
+        defs = []
+        for d in meaning.get("definitions", [])[:MAX_DEFS_PER_PART]:
             definition = (d.get("definition") or "").strip()
             if definition:
-                lines.append(f"  {i}. {definition}")
-        lines.append("")
+                defs.append(definition)
+        if defs:
+            meanings.append({"pos": pos, "defs": defs})
 
-    result = "\n".join(lines).rstrip()
-    return result or f"{word}\n\nNo definition found."
+    if not meanings:
+        return _msg(word, "No definition found.")
+
+    return {
+        "title": entry.get("word", word),
+        "phonetic": phonetic,
+        "meanings": meanings,
+    }
 
 
 def make_hotkey_handler(lang):
@@ -226,18 +260,18 @@ def make_hotkey_handler(lang):
     def on_hotkey():
         raw = get_selected_text()
         if raw is None:
-            _result_q.put(
-                "Clipboard unavailable.\n\n"
+            _result_q.put(_msg(
+                "Clipboard unavailable",
                 "On Linux, install a clipboard tool:\n"
-                "  sudo apt install xclip   (or xsel)"
-            )
+                "sudo apt install xclip   (or xsel)"
+            ))
             return
         word = clean_word(raw)
         if not word:
-            _result_q.put(
-                "No word selected.\n\n"
+            _result_q.put(_msg(
+                "No word selected",
                 "Select a word first, then press the hotkey."
-            )
+            ))
             return
         _result_q.put(lookup(word, lang))
     return on_hotkey
@@ -251,57 +285,147 @@ class PopupManager:
         self.root = root
         self.timeout_ms = int(timeout_s * 1000)
         self.popup = None
+        f = lambda **kw: tkfont.Font(root=root, family=UI_FONT, **kw)
+        self.f_word = f(size=17, weight="bold")
+        self.f_phon = f(size=11, slant="italic")
+        self.f_pos = f(size=10, weight="bold")
+        self.f_num = f(size=11, weight="bold")
+        self.f_def = f(size=11)
+        self.f_hint = f(size=8)
 
     def poll(self):
         try:
             while True:
-                text = _result_q.get_nowait()
-                self.show(text)
+                payload = _result_q.get_nowait()
+                self.show(payload)
         except queue.Empty:
             pass
         self.root.after(80, self.poll)
 
-    def show(self, text):
+    # -- drawing helpers ----------------------------------------------------
+    @staticmethod
+    def _round_rect(c, x1, y1, x2, y2, r, **kw):
+        pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+               x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+               x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+        return c.create_polygon(pts, smooth=True, tags="card", **kw)
+
+    def _render(self, c, payload):
+        """Draw the content onto the canvas; return the (width, height) needed."""
+        x0, y = _PAD, _PAD
+        title = payload.get("title")
+        phonetic = payload.get("phonetic")
+        meanings = payload.get("meanings")
+        message = payload.get("message")
+        sep_y = None
+
+        if title:
+            wid = c.create_text(x0, y, text=title, anchor="nw",
+                                font=self.f_word, fill=THEME["word"])
+            b = c.bbox(wid)
+            if phonetic:
+                c.create_text(b[2] + 10, b[3] - 2, text=phonetic, anchor="sw",
+                              font=self.f_phon, fill=THEME["phonetic"])
+            y = b[3] + 9
+            sep_y = y
+            y += 12
+
+        if meanings:
+            for m in meanings:
+                pos = (m.get("pos") or "").upper()
+                if pos:
+                    pid = c.create_text(x0, y, text=pos, anchor="nw",
+                                        font=self.f_pos, fill=THEME["accent"])
+                    y = c.bbox(pid)[3] + 6
+                for i, d in enumerate(m["defs"], 1):
+                    c.create_text(x0 + 2, y, text=f"{i}", anchor="nw",
+                                  font=self.f_num, fill=THEME["accent"])
+                    did = c.create_text(x0 + _NUM_COL, y, text=d, anchor="nw",
+                                        font=self.f_def, fill=THEME["definition"],
+                                        width=_DEF_WRAP)
+                    y = c.bbox(did)[3] + 9
+                y += 6
+            y -= 6
+        elif message:
+            mid = c.create_text(x0, y, text=message, anchor="nw",
+                                font=self.f_def, fill=THEME["definition"],
+                                width=_DEF_WRAP)
+            y = c.bbox(mid)[3]
+
+        content = c.bbox("all")
+        w = max(content[2] + _PAD, 240)
+
+        if sep_y is not None:
+            c.create_line(_PAD, sep_y, w - _PAD, sep_y, fill=THEME["border"])
+
+        y += 12
+        c.create_text(w - _PAD, y, text="Esc / click to close", anchor="ne",
+                      font=self.f_hint, fill=THEME["hint"])
+
+        full = c.bbox("all")
+        return max(w, full[2] + _PAD), full[3] + _PAD
+
+    def _fade_in(self, win, step=0):
+        try:
+            alpha = min(1.0, (step + 1) * 0.2)
+            win.attributes("-alpha", alpha)
+        except tk.TclError:
+            return
+        if alpha < 1.0:
+            win.after(12, lambda: self._fade_in(win, step + 1))
+
+    # -- public -------------------------------------------------------------
+    def show(self, payload):
         self.close()
 
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg="#1e1e1e")
 
-        frame = tk.Frame(win, bg="#1e1e1e", padx=14, pady=12,
-                         highlightbackground="#3a3a3a", highlightthickness=1)
-        frame.pack()
+        canvas_bg = THEME["card"]
+        if IS_WIN:
+            win.configure(bg=_TRANSPARENT)
+            try:
+                win.attributes("-transparentcolor", _TRANSPARENT)
+                canvas_bg = _TRANSPARENT  # lets the rounded corners show through
+            except tk.TclError:
+                win.configure(bg=THEME["card"])
+        else:
+            win.configure(bg=THEME["card"])
 
-        tk.Label(
-            frame, text=text, justify="left", anchor="w",
-            bg="#1e1e1e", fg="#f0f0f0",
-            font=("Segoe UI", 11), wraplength=380,
-        ).pack(fill="x")
+        try:
+            win.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
 
-        tk.Label(
-            frame, text="Esc / click to close",
-            bg="#1e1e1e", fg="#777777", font=("Segoe UI", 8),
-        ).pack(anchor="e", pady=(8, 0))
+        c = tk.Canvas(win, bg=canvas_bg, highlightthickness=0, bd=0)
+        c.pack()
+
+        w, h = self._render(c, payload)
+        self._round_rect(c, 1, 1, w - 1, h - 1, _RADIUS,
+                         fill=THEME["card"], outline=THEME["border"], width=1)
+        c.tag_lower("card")
+        c.config(width=w, height=h)
 
         # Position near the cursor, nudged to stay fully on screen.
         win.update_idletasks()
         px, py = self.root.winfo_pointerxy()
-        w, h = win.winfo_width(), win.winfo_height()
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        x = min(px + 12, sw - w - 10)
-        y = min(py + 12, sh - h - 10)
-        win.geometry(f"+{max(x, 10)}+{max(y, 10)}")
+        x = min(px + 14, sw - w - 12)
+        y = min(py + 16, sh - h - 12)
+        win.geometry(f"{w}x{h}+{max(x, 10)}+{max(y, 10)}")
 
-        for widget in (win, frame):
+        for widget in (win, c):
             widget.bind("<Button-1>", lambda e: self.close())
         win.bind("<Escape>", lambda e: self.close())
         try:
             win.focus_force()
         except tk.TclError:
             pass
-        win.after(self.timeout_ms, self.close)
+
         self.popup = win
+        self._fade_in(win)
+        win.after(self.timeout_ms, self.close)
 
     def close(self):
         if self.popup is not None:
