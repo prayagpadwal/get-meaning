@@ -97,9 +97,22 @@ _RADIUS = 14         # corner radius
 # where the copy did nothing (e.g. no word was selected).
 _SENTINEL = "\x00__get_meaning_no_selection__\x00"
 
-# Results flow from the hotkey thread -> the main (UI) thread via this queue.
-_result_q: "queue.Queue[str]" = queue.Queue()
+# Work items flow from the hotkey thread -> the main (UI) thread via this queue.
+# Each item is a tuple: ("loading", token, word) or ("result", token, payload).
+_result_q: "queue.Queue" = queue.Queue()
 _kbctl = Controller()
+
+# A monotonic token identifies the most recent request, so a slow lookup that
+# resolves after a newer keypress can be discarded instead of overwriting it.
+_current_token = 0
+_token_lock = threading.Lock()
+
+
+def _next_token():
+    global _current_token
+    with _token_lock:
+        _current_token += 1
+        return _current_token
 
 
 # ---------------------------------------------------------------------------
@@ -256,24 +269,36 @@ def lookup(word, lang):
 
 
 def make_hotkey_handler(lang):
-    """Build the callback that runs on the hotkey (listener) thread."""
+    """Build the callback that fires when the hotkey is pressed.
+
+    The work runs on a background thread so the key listener stays responsive.
+    Crucially, the selection is copied *before* any popup appears — the popup
+    grabs keyboard focus, so copying afterwards would target the popup instead
+    of the user's text."""
     def on_hotkey():
-        raw = get_selected_text()
-        if raw is None:
-            _result_q.put(_msg(
-                "Clipboard unavailable",
-                "On Linux, install a clipboard tool:\n"
-                "sudo apt install xclip   (or xsel)"
-            ))
-            return
-        word = clean_word(raw)
-        if not word:
-            _result_q.put(_msg(
-                "No word selected",
-                "Select a word first, then press the hotkey."
-            ))
-            return
-        _result_q.put(lookup(word, lang))
+        token = _next_token()
+
+        def work():
+            raw = get_selected_text()
+            if raw is None:
+                _result_q.put(("result", token, _msg(
+                    "Clipboard unavailable",
+                    "On Linux, install a clipboard tool:\n"
+                    "sudo apt install xclip   (or xsel)")))
+                return
+            word = clean_word(raw)
+            if not word:
+                _result_q.put(("result", token, _msg(
+                    "No word selected",
+                    "Select a word first, then press the hotkey.")))
+                return
+            # Show the panel immediately (with the word + a spinner) ...
+            _result_q.put(("loading", token, word))
+            # ... then fill in the definition once the network responds.
+            _result_q.put(("result", token, lookup(word, lang)))
+
+        threading.Thread(target=work, daemon=True).start()
+
     return on_hotkey
 
 
@@ -285,6 +310,13 @@ class PopupManager:
         self.root = root
         self.timeout_ms = int(timeout_s * 1000)
         self.popup = None
+        self.canvas = None
+        self._popup_token = None
+        self._anchor = (0, 0)
+        self._loading = False
+        self._spin_center = (0, 0, 0)
+        self._anim_id = None
+        self._timeout_id = None
         f = lambda **kw: tkfont.Font(root=root, family=UI_FONT, **kw)
         self.f_word = f(size=17, weight="bold")
         self.f_phon = f(size=11, slant="italic")
@@ -296,11 +328,14 @@ class PopupManager:
     def poll(self):
         try:
             while True:
-                payload = _result_q.get_nowait()
-                self.show(payload)
+                kind, token, data = _result_q.get_nowait()
+                if kind == "loading":
+                    self.show_loading(token, data)
+                elif kind == "result":
+                    self.present(token, data)
         except queue.Empty:
             pass
-        self.root.after(80, self.poll)
+        self.root.after(60, self.poll)
 
     # -- drawing helpers ----------------------------------------------------
     @staticmethod
@@ -310,8 +345,14 @@ class PopupManager:
                x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
         return c.create_polygon(pts, smooth=True, tags="card", **kw)
 
+    def _footer(self, c, y, w):
+        c.create_text(w - _PAD, y + 12, text="Esc / click to close", anchor="ne",
+                      font=self.f_hint, fill=THEME["hint"])
+        full = c.bbox("all")
+        return max(w, full[2] + _PAD), full[3] + _PAD
+
     def _render(self, c, payload):
-        """Draw the content onto the canvas; return the (width, height) needed."""
+        """Draw a result payload; return the (width, height) needed."""
         x0, y = _PAD, _PAD
         title = payload.get("title")
         phonetic = payload.get("phonetic")
@@ -354,34 +395,56 @@ class PopupManager:
 
         content = c.bbox("all")
         w = max(content[2] + _PAD, 240)
-
         if sep_y is not None:
             c.create_line(_PAD, sep_y, w - _PAD, sep_y, fill=THEME["border"])
+        return self._footer(c, y, w)
 
-        y += 12
-        c.create_text(w - _PAD, y, text="Esc / click to close", anchor="ne",
-                      font=self.f_hint, fill=THEME["hint"])
+    def _render_loading(self, c, word):
+        """Draw the 'looking up...' state; return the (width, height) needed."""
+        x0, y = _PAD, _PAD
+        sep_y = None
+        if word:
+            wid = c.create_text(x0, y, text=word, anchor="nw",
+                                font=self.f_word, fill=THEME["word"])
+            y = c.bbox(wid)[3] + 9
+            sep_y = y
+            y += 12
 
-        full = c.bbox("all")
-        return max(w, full[2] + _PAD), full[3] + _PAD
+        tid = c.create_text(x0 + 26, y, text="Looking up…", anchor="nw",
+                            font=self.f_def, fill=THEME["phonetic"])
+        tb = c.bbox(tid)
+        self._spin_center = (x0 + 9, (tb[1] + tb[3]) // 2, 7)
+        y = tb[3]
+
+        content = c.bbox("all")
+        w = max(content[2] + _PAD, 220)
+        if sep_y is not None:
+            c.create_line(_PAD, sep_y, w - _PAD, sep_y, fill=THEME["border"])
+        return self._footer(c, y, w)
+
+    def _spin(self, c, angle):
+        if not self._loading or self.canvas is not c:
+            return
+        cx, cy, r = self._spin_center
+        c.delete("spinner")
+        c.create_arc(cx - r, cy - r, cx + r, cy + r, start=angle, extent=100,
+                     style="arc", outline=THEME["accent"], width=3, tags="spinner")
+        self._anim_id = self.root.after(55, lambda: self._spin(c, (angle - 30) % 360))
 
     def _fade_in(self, win, step=0):
         try:
-            alpha = min(1.0, (step + 1) * 0.2)
+            alpha = min(1.0, (step + 1) * 0.25)
             win.attributes("-alpha", alpha)
         except tk.TclError:
             return
         if alpha < 1.0:
             win.after(12, lambda: self._fade_in(win, step + 1))
 
-    # -- public -------------------------------------------------------------
-    def show(self, payload):
-        self.close()
-
+    # -- window lifecycle ---------------------------------------------------
+    def _create_window(self):
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-
         canvas_bg = THEME["card"]
         if IS_WIN:
             win.configure(bg=_TRANSPARENT)
@@ -392,48 +455,135 @@ class PopupManager:
                 win.configure(bg=THEME["card"])
         else:
             win.configure(bg=THEME["card"])
-
         try:
             win.attributes("-alpha", 0.0)
         except tk.TclError:
             pass
-
         c = tk.Canvas(win, bg=canvas_bg, highlightthickness=0, bd=0)
         c.pack()
+        return win, c
 
-        w, h = self._render(c, payload)
+    def _draw_card_bg(self, c, w, h):
         self._round_rect(c, 1, 1, w - 1, h - 1, _RADIUS,
                          fill=THEME["card"], outline=THEME["border"], width=1)
         c.tag_lower("card")
         c.config(width=w, height=h)
 
-        # Position near the cursor, nudged to stay fully on screen.
-        win.update_idletasks()
-        px, py = self.root.winfo_pointerxy()
+    def _clamp(self, x, y, w, h, win):
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        x = min(px + 14, sw - w - 12)
-        y = min(py + 16, sh - h - 12)
-        win.geometry(f"{w}x{h}+{max(x, 10)}+{max(y, 10)}")
+        x = max(10, min(x, sw - w - 12))
+        y = max(10, min(y, sh - h - 12))
+        return x, y
 
-        for widget in (win, c):
+    def _bind_and_reveal(self, win):
+        # Close on a click anywhere inside, on Escape, or when focus is lost
+        # (i.e. the user clicked outside the popup).
+        for widget in (win, self.canvas):
             widget.bind("<Button-1>", lambda e: self.close())
         win.bind("<Escape>", lambda e: self.close())
         try:
             win.focus_force()
         except tk.TclError:
             pass
-
-        self.popup = win
+        # Arm the click-outside behaviour slightly late so the popup grabbing
+        # focus on open doesn't immediately dismiss itself.
+        win.after(300, lambda: self._arm_focus_out(win))
         self._fade_in(win)
-        win.after(self.timeout_ms, self.close)
+
+    def _arm_focus_out(self, win):
+        if self.popup is win:
+            win.bind("<FocusOut>", lambda e: self.close())
+
+    def _start_timeout(self):
+        self._cancel_timeout()
+        self._timeout_id = self.root.after(self.timeout_ms, self.close)
+
+    def _cancel_timeout(self):
+        if self._timeout_id is not None:
+            try:
+                self.root.after_cancel(self._timeout_id)
+            except tk.TclError:
+                pass
+            self._timeout_id = None
+
+    def _cancel_anim(self):
+        self._loading = False
+        if self._anim_id is not None:
+            try:
+                self.root.after_cancel(self._anim_id)
+            except tk.TclError:
+                pass
+            self._anim_id = None
+
+    # -- public -------------------------------------------------------------
+    def show_loading(self, token, word):
+        if token != _current_token:
+            return  # a newer request already superseded this one
+        self.close()
+        win, c = self._create_window()
+        self.popup, self.canvas, self._popup_token = win, c, token
+        self._loading = True
+
+        w, h = self._render_loading(c, word)
+        self._draw_card_bg(c, w, h)
+
+        win.update_idletasks()
+        px, py = self.root.winfo_pointerxy()
+        x, y = self._clamp(px + 14, py + 16, w, h, win)
+        self._anchor = (x, y)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+
+        self._bind_and_reveal(win)
+        self._spin(c, 0)  # no auto-close timeout while still loading
+
+    def present(self, token, payload):
+        if token != _current_token:
+            return
+        if (self.popup is not None and self.canvas is not None
+                and self._popup_token == token):
+            self._update_in_place(payload)
+        else:
+            self._show_fresh(token, payload)
+
+    def _update_in_place(self, payload):
+        """Replace a loading popup's content with the result, keeping its spot."""
+        self._cancel_anim()
+        win, c = self.popup, self.canvas
+        c.delete("all")
+        w, h = self._render(c, payload)
+        self._draw_card_bg(c, w, h)
+        win.update_idletasks()
+        x, y = self._clamp(self._anchor[0], self._anchor[1], w, h, win)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        self._start_timeout()
+
+    def _show_fresh(self, token, payload):
+        """Show a result with no preceding loading popup (e.g. 'no word')."""
+        self.close()
+        win, c = self._create_window()
+        self.popup, self.canvas, self._popup_token = win, c, token
+        self._loading = False
+        w, h = self._render(c, payload)
+        self._draw_card_bg(c, w, h)
+        win.update_idletasks()
+        px, py = self.root.winfo_pointerxy()
+        x, y = self._clamp(px + 14, py + 16, w, h, win)
+        self._anchor = (x, y)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        self._bind_and_reveal(win)
+        self._start_timeout()
 
     def close(self):
+        self._cancel_anim()
+        self._cancel_timeout()
         if self.popup is not None:
             try:
                 self.popup.destroy()
             except tk.TclError:
                 pass
-            self.popup = None
+        self.popup = None
+        self.canvas = None
+        self._popup_token = None
 
 
 # ---------------------------------------------------------------------------

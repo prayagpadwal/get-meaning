@@ -18,6 +18,7 @@ it works **everywhere**, not just inside Chrome.
 ## Features
 
 - 🔎 **Look up any selected word** with a single hotkey (default: `Alt+Shift+D`)
+- ⚡ **Instant feedback** — the panel appears immediately with a loading spinner, then fills in the definition when the lookup returns
 - 🖥️ **Works in every app**, not just the browser — desktop apps, PDFs, editors
 - 🌍 **Cross-platform** — Windows, macOS, and Linux (X11)
 - 🪶 **Tiny and dependency-light** — three small Python libraries
@@ -63,7 +64,9 @@ python get_meaning.py
 ```
 
 Then, in **any** application: **select a word → press `Alt+Shift+D`**.
-A popup appears next to your cursor. Press `Esc` or click it to dismiss.
+A panel appears next to your cursor — instantly, with a spinner — and fills in
+the definition a moment later. Dismiss it by clicking anywhere (inside or
+outside the panel) or pressing `Esc`.
 
 Quit by closing the terminal window or pressing `Ctrl+C` in it.
 
