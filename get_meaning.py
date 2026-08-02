@@ -157,19 +157,38 @@ def clean_word(text):
 # ---------------------------------------------------------------------------
 # Dictionary lookup
 # ---------------------------------------------------------------------------
+def _fetch(url, retries=2):
+    """GET the URL, retrying on transient errors (network failures and 5xx).
+    Returns the response, or None if the request never got through.
+    A 404 is returned immediately — it's a definitive 'no such word'."""
+    resp = None
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.get(url, timeout=6)
+        except requests.RequestException:
+            resp = None
+        else:
+            # Definitive answers: don't retry.
+            if resp.status_code < 500:
+                return resp
+        if attempt < retries:
+            time.sleep(0.6 * (attempt + 1))  # simple backoff
+    return resp
+
+
 def lookup(word, lang):
     """Return a formatted definition string, or a friendly message."""
     url = API.format(lang=lang, word=requests.utils.quote(word))
-    try:
-        resp = requests.get(url, timeout=6)
-    except requests.RequestException:
+    resp = _fetch(url)
+
+    if resp is None:
         return (f"{word}\n\nCouldn't reach the dictionary.\n"
                 "Check your internet connection.")
-
     if resp.status_code == 404:
         return f"{word}\n\nNo definition found."
     if resp.status_code != 200:
-        return f"{word}\n\nDictionary error (HTTP {resp.status_code})."
+        return (f"{word}\n\nThe dictionary service is having trouble "
+                f"(HTTP {resp.status_code}).\nPlease try again in a moment.")
 
     try:
         entry = resp.json()[0]
