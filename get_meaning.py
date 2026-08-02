@@ -6,7 +6,7 @@ definition of the currently selected word anywhere on your computer
 
 How it works:
   1. Select a word in any application.
-  2. Press the hotkey (default: Ctrl+Shift+D).
+  2. Press the hotkey (default: Alt+Shift+D).
   3. Get Meaning copies the selection, looks it up in a free online
      dictionary, and shows a small popup next to your cursor.
 
@@ -59,7 +59,7 @@ import tkinter as tk  # noqa: E402  (stdlib, always available)
 # ---------------------------------------------------------------------------
 # Defaults (all overridable via command-line flags — see main())
 # ---------------------------------------------------------------------------
-DEFAULT_HOTKEY = "<ctrl>+<shift>+d"
+DEFAULT_HOTKEY = "<alt>+<shift>+d"
 DEFAULT_LANG = "en"
 DEFAULT_TIMEOUT_S = 12
 API = "https://api.dictionaryapi.dev/api/v2/entries/{lang}/{word}"
@@ -85,7 +85,7 @@ def _send_copy():
     """Simulate the platform's copy shortcut, releasing any hotkey modifiers
     that might interfere first."""
     time.sleep(0.05)
-    # The user may still be holding the hotkey (e.g. Ctrl+Shift+D). Release the
+    # The user may still be holding the hotkey (e.g. Alt+Shift+D). Release the
     # extra modifiers so they don't turn our copy into a different shortcut.
     for k in (Key.shift, Key.alt):
         try:
