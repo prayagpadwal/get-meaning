@@ -12,6 +12,9 @@ dist/
 venv/
 env/
 
+# Runtime crash log
+get_meaning_error.log
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
