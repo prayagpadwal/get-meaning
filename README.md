@@ -75,6 +75,32 @@ Quit by closing the terminal window or pressing `Ctrl+C` in it.
 - **Windows:** double-click `run_windows.bat`
 - **macOS / Linux:** `chmod +x run_unix.sh && ./run_unix.sh`
 
+### Run it without a terminal (Windows)
+
+Prefer not to keep a console window open? Double-click **`Start Get Meaning.vbs`** —
+it launches the app silently in the background (no console). To stop it, double-click
+**`Stop Get Meaning.bat`**.
+
+Only one copy runs at a time: if it's already running, launching it again just
+exits quietly, so you never end up with duplicate instances fighting over the hotkey.
+
+### Start automatically on login (Windows)
+
+Double-click **`Enable Start with Windows.bat`** and Get Meaning will start silently
+every time you log in — no need to launch it yourself. Double-click
+**`Disable Start with Windows.bat`** to turn that off.
+
+Under the hood these just run:
+
+```bash
+python get_meaning.py --install-autostart     # enable
+python get_meaning.py --uninstall-autostart   # disable
+python get_meaning.py --autostart-status       # check
+```
+
+Enabling adds a small launcher to your Windows Startup folder; disabling removes it.
+Nothing is installed system-wide and no admin rights are needed.
+
 ### Options
 
 | Flag         | Default          | Description                                  |
@@ -167,10 +193,12 @@ clipboard contents are restored a moment later.
 
 ## Roadmap
 
+- [x] **Silent background launch** + **start on login** (Windows)
+- [x] **Single-instance** guard (no duplicate copies)
 - [ ] Optional **double-click** trigger (in addition to the hotkey)
 - [ ] **Offline dictionary** mode (bundle WordNet — works with no internet)
-- [ ] **System-tray icon** with start/quit and settings
-- [ ] **Start on login** option
+- [ ] **System-tray icon** with quit and settings
+- [ ] **Start on login** for macOS and Linux
 - [ ] Prebuilt **standalone executables** (no Python needed) via PyInstaller
 
 ---
