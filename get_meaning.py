@@ -22,6 +22,7 @@ import os
 import sys
 import time
 import queue
+import signal
 import socket
 import argparse
 import threading
@@ -792,6 +793,18 @@ def main(argv=None):
 
         listener = keyboard.GlobalHotKeys({hotkey: make_hotkey_handler(args.lang)})
         listener.start()
+
+        # Make Ctrl+C exit the Tk mainloop cleanly instead of surfacing a
+        # KeyboardInterrupt traceback from inside a callback.
+        def _on_sigint(_signum, _frame):
+            try:
+                root.quit()
+            except Exception:
+                pass
+        try:
+            signal.signal(signal.SIGINT, _on_sigint)
+        except (ValueError, OSError):
+            pass  # not on the main thread on some platforms
 
         print("Get Meaning is running.")
         print(f"  Select a word anywhere, then press:  {args.hotkey}")
