@@ -20,8 +20,9 @@ it works **everywhere**, not just inside Chrome.
 - 🔎 **Look up any selected word** with a single hotkey (default: `Alt+Shift+D`)
 - ⚡ **Instant feedback** — the panel appears immediately with a loading spinner, then fills in the definition when the lookup returns
 - 🖥️ **Works in every app**, not just the browser — desktop apps, PDFs, editors
+- 🧭 **System-tray icon** — a right-click menu to quit and toggle start-on-login
 - 🌍 **Cross-platform** — Windows, macOS, and Linux (X11)
-- 🪶 **Tiny and dependency-light** — three small Python libraries
+- 🪶 **Lightweight** — a few small Python libraries
 - 🔒 **Respects your clipboard** — restores whatever you had copied afterwards
 - ⚙️ **Configurable** — change the hotkey, language, and popup timeout
 
@@ -68,7 +69,9 @@ A panel appears next to your cursor — instantly, with a spinner — and fills 
 the definition a moment later. Dismiss it by clicking anywhere (inside or
 outside the panel) or pressing `Esc`.
 
-Quit by closing the terminal window or pressing `Ctrl+C` in it.
+A **📖 icon appears in your system tray** (by the clock) while it runs.
+**Right-click it** for a menu to **Quit** or toggle **Start with Windows**. You
+can also quit by closing the terminal window or pressing `Ctrl+C` in it.
 
 ### Convenience launchers
 
@@ -187,6 +190,7 @@ clipboard contents are restored a moment later.
 | "No word selected" every time | Make sure the word is actually highlighted before pressing the hotkey. |
 | "Clipboard unavailable" (Linux) | Install `xclip` or `xsel`. |
 | "Couldn't reach the dictionary" | Check your internet connection. |
+| No tray icon appears | Install the optional deps: `pip install pystray Pillow` (the app still works without them). |
 | Popup shows the wrong/previous word | Re-select the word; give the app a moment between lookups. |
 
 ---
@@ -195,9 +199,9 @@ clipboard contents are restored a moment later.
 
 - [x] **Silent background launch** + **start on login** (Windows)
 - [x] **Single-instance** guard (no duplicate copies)
+- [x] **System-tray icon** with quit and start-on-login toggle
 - [ ] Optional **double-click** trigger (in addition to the hotkey)
 - [ ] **Offline dictionary** mode (bundle WordNet — works with no internet)
-- [ ] **System-tray icon** with quit and settings
 - [ ] **Start on login** for macOS and Linux
 - [ ] Prebuilt **standalone executables** (no Python needed) via PyInstaller
 
