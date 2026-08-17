@@ -61,6 +61,15 @@ if _MISSING:
 import tkinter as tk  # noqa: E402  (stdlib, always available)
 import tkinter.font as tkfont  # noqa: E402
 
+# Optional: a system-tray icon. If these aren't installed the app still runs
+# fine, just without the tray icon.
+try:
+    import pystray  # noqa: E402
+    from PIL import Image, ImageDraw  # noqa: E402
+    _HAVE_TRAY = True
+except ImportError:
+    _HAVE_TRAY = False
+
 # ---------------------------------------------------------------------------
 # Defaults (all overridable via command-line flags — see main())
 # ---------------------------------------------------------------------------
@@ -728,6 +737,48 @@ def _log_error(exc):
 
 
 # ---------------------------------------------------------------------------
+# System-tray icon (optional — needs pystray + Pillow)
+# ---------------------------------------------------------------------------
+def _make_tray_image():
+    """Draw a simple magnifying-glass icon (search / look-up)."""
+    size = 64
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    card = (35, 37, 43, 255)     # dark rounded background
+    accent = (138, 180, 248, 255)  # the same blue used in the popup
+    d.rounded_rectangle([2, 2, 61, 61], radius=14, fill=card)
+    d.ellipse([16, 14, 40, 38], outline=accent, width=5)   # lens
+    d.line([36, 34, 50, 48], fill=accent, width=6)          # handle
+    return img
+
+
+def create_tray_icon(args, on_quit):
+    """Build the tray icon, or return None if pystray/Pillow aren't available."""
+    if not _HAVE_TRAY:
+        return None
+
+    def _toggle_autostart(icon, item):
+        if os.path.exists(_autostart_file()):
+            uninstall_autostart()
+        else:
+            install_autostart(args)
+
+    items = [
+        pystray.MenuItem("Get Meaning", None, enabled=False),
+        pystray.MenuItem(f"Hotkey:  {args.hotkey}", None, enabled=False),
+        pystray.Menu.SEPARATOR,
+    ]
+    if IS_WIN:
+        items.append(pystray.MenuItem(
+            "Start with Windows", _toggle_autostart,
+            checked=lambda item: os.path.exists(_autostart_file())))
+    items.append(pystray.MenuItem("Quit", lambda icon, item: on_quit()))
+
+    return pystray.Icon("get_meaning", _make_tray_image(),
+                        "Get Meaning", pystray.Menu(*items))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def normalize_hotkey(h):
@@ -784,6 +835,7 @@ def main(argv=None):
 
     hotkey = normalize_hotkey(args.hotkey)
     listener = None
+    icon = None
     try:
         root = tk.Tk()
         root.withdraw()
@@ -794,13 +846,24 @@ def main(argv=None):
         listener = keyboard.GlobalHotKeys({hotkey: make_hotkey_handler(args.lang)})
         listener.start()
 
+        # Tray icon. Its "Quit" runs on the pystray thread, so it just sets an
+        # event; a small Tk-side watcher does the actual (main-thread) shutdown.
+        quit_event = threading.Event()
+        icon = create_tray_icon(args, on_quit=quit_event.set)
+        if icon is not None:
+            threading.Thread(target=icon.run, daemon=True).start()
+
+        def _watch_quit():
+            if quit_event.is_set():
+                root.quit()
+            else:
+                root.after(150, _watch_quit)
+        root.after(150, _watch_quit)
+
         # Make Ctrl+C exit the Tk mainloop cleanly instead of surfacing a
         # KeyboardInterrupt traceback from inside a callback.
         def _on_sigint(_signum, _frame):
-            try:
-                root.quit()
-            except Exception:
-                pass
+            quit_event.set()
         try:
             signal.signal(signal.SIGINT, _on_sigint)
         except (ValueError, OSError):
@@ -808,6 +871,8 @@ def main(argv=None):
 
         print("Get Meaning is running.")
         print(f"  Select a word anywhere, then press:  {args.hotkey}")
+        if icon is not None:
+            print("  Right-click the tray icon (by the clock) to quit.")
         print("  Press Ctrl+C here (or close this window) to quit.")
 
         root.mainloop()
@@ -817,6 +882,11 @@ def main(argv=None):
         _log_error(exc)
         raise
     finally:
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
         if listener is not None:
             try:
                 listener.stop()
